@@ -1,0 +1,408 @@
+---
+title: INF0613 -- Aprendizado de Máquina Não Supervisionado
+output: pdf_document
+subtitle: Trabalho 3 - Técnicas de Agrupamento
+author: 
+  - Victor Teodoro Goraieb
+  - André de Souza Gonçalves
+  - Vitor Anastacio da Silva
+---
+
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = TRUE, error = FALSE, message = FALSE, warning = FALSE, tidy = FALSE)
+options(digits = 3)
+```
+
+O objetivo deste trabalho é exercitar o uso de algoritmos de agrupamento. Neste trabalho, vamos analisar diferentes atributos de carros com o objetivo de verificar se seus atributos são suficientes para indicar um valor de risco de seguro. O conjunto de dados já apresenta o risco calculado no campo `symboling` indicado na Tabela 1. Quanto mais próximo de 3, maior o risco. O conjunto de dados que deve ser usado está disponível na página do Moodle com o nome `imports-85.data`.
+
+# Atividade 0 -- Configurando o ambiente
+Antes de começar a implementação do seu trabalho configure o _workspace_ e importe todos os pacotes e execute o preprocessamento da base:
+
+```{r atv0-code}
+# Adicione os pacotes usados neste trabalho:
+library(apcluster)
+library(fclust)
+library(ppclust)
+library(dbscan)
+library(gridExtra)
+library(fpc)
+library(NbClust)
+library(factoextra)
+library(reshape2)
+library(cluster)
+library(modeest) #pacote para calcular a moda
+#install.packages('modeest')
+
+
+# Configure ambiente de trabalho na mesma pasta 
+# onde colocou a base de dados:
+setwd("C:/Users/vgora/Desktop/MINERAÇÃO DE DADOS COMPLEXOS/INF0615010 - Aprendizado de Máquina Não Supervisionado/Trabalho 3")
+
+
+```
+
+
+
+# Atividade 1 -- Análise e Preparação dos Dados
+
+O conjunto de dados é composto por 205 amostras com 26 atributos cada descritos na Tabela 1. Os atributos são dos tipos `factor`, `integer` ou  `numeric`. O objetivo desta etapa é a análise e preparação desses dados de forma a ser possível agrupá-los nas próximas atividades. 
+
+**Implementações:** Nos itens a seguir você implementará a leitura da base e aplicará tratamentos básicos.
+
+a) *Tratamento de dados Incompletos:* Amostras incompletas deverão ser tratadas, e você deve escolher a forma que achar mais adequada. Considere como uma amostra incompleta uma linha na qual faltam dados em alguma das colunas selecionadas anteriormente. Note que, dados faltantes nas amostras podem causar uma conversão do tipo do atributo de todas as amostras e isso pode impactar no item b). 
+
+```{r atv1a-code}
+# Leitura da base
+base_dados <- read.csv('imports-85.data', header = FALSE, stringsAsFactors = TRUE)
+summary(base_dados)
+
+base_dados[base_dados == '?'] <- NA
+summary(base_dados)
+
+base_dados$V1 <- as.integer(base_dados$V1)
+base_dados$V2 <- as.numeric(base_dados$V2)
+base_dados[, c('V19','V20','V22','V23','V26')] <- sapply(base_dados[, c('V19','V20','V22','V23','V26')], as.numeric)
+
+sapply(base_dados, class)
+
+# Tratamento de dados faltantes
+fill_na <- function(column){
+  if(is.factor(column)){
+    column[is.na(column)] <- mlv(column, method = "mfv")[1]
+  }
+  else{
+    column[is.na(column)] <- median(column, na.rm = TRUE)
+  }
+  return(column)
+}
+
+for (column in names(base_dados[colSums(is.na(base_dados))!=0])){
+  base_dados[, column] <- fill_na(base_dados[[column]])
+}
+
+summary(base_dados)
+
+```
+
+b) *Seleção de Atributos:* Atributos não-numéricos não podem ser usados com as técnicas  agrupamento vistas em aula. Portanto, você deve selecionar um conjunto de atributos numéricos que serão usados para o agrupamento. Além disso você deve analisar se os atributos não-numéricos são descritivos para a realização dos agrupamentos. Caso um dos atributos não numéricos seja necessário, use a técnica do  *one hot encoding* para transformá-lo em numérico. **Não** aplique essa técnica nos atributos `symboling` e `make` para os agrupamentos subsequentes, eles não devem fazer parte do agrupamento. 
+
+```{r atv1b-code}
+# Seleção de atributos por classe
+num_cols <- names(base_dados)[!sapply(base_dados, class) == 'factor']
+
+factor_cols <- names(base_dados)[sapply(base_dados, class) == 'factor']
+
+factor_cols <- factor_cols[factor_cols != 'V3']
+num_cols <- num_cols[num_cols != 'V1']
+
+one_hot_encoding <- function(df, coluna, uniques, prefix = ""){
+    
+    for (value in uniques[-1]) {
+        new_col <- paste(prefix, value, sep = "", collapse = NULL)
+        df[[new_col]] <- as.numeric(df[[coluna]] == value)
+    }
+    
+    df[[coluna]] <- NULL
+    
+    return(df)
+}
+
+# Vamos analisar inicialmente as features numéricas, avaliando por correlação de Pearson:
+
+base_dados_num <- base_dados[, num_cols]
+
+corr_matrix_num <- cor(base_dados_num, method = 'pearson')
+
+pares_colunas <- melt(corr_matrix_num, id = rownames(corr_matrix_num))
+
+colunas_correlacionadas <-pares_colunas[((pares_colunas$value >0.8) | (pares_colunas$value < -0.8)) & (pares_colunas$Var1 != pares_colunas$Var2),]
+
+colunas_correlacionadas
+
+# Nós decidimos manter apenas a coluna V11 dentre as V17, V14, V10 e V12.
+num_cols_fs <- setdiff(num_cols,c('V17','V12','V14','V10'))
+
+# Agora analisando também as features categóricas, que serão tratadas com One Hot Encoding, e aplicando a Correlação de Spearman
+
+base_dados_cat = base_dados[, c(num_cols_fs,factor_cols)]
+
+for (column in factor_cols){
+  base_dados_cat <- one_hot_encoding(base_dados_cat, column, unique(base_dados_cat[, column]), paste(column,'_', sep=''))
+}
+
+
+corr_matrix_spearman <- cor(base_dados_cat, method = 'spearman')
+
+pares_colunas_spearman <- melt(corr_matrix_spearman, id = rownames(corr_matrix_spearman))
+
+colunas_correlacionadas_spearman <-pares_colunas_spearman[((pares_colunas_spearman$value >0.8) | (pares_colunas_spearman$value < -0.8)) & (pares_colunas_spearman$Var1 != pares_colunas_spearman$Var2),]
+
+colunas_correlacionadas_spearman
+
+# Nós decidimos, dada a alta correlação, retirar as colunas 'V16_two','V18_4bbl','V18_idi', 'V25'
+
+final_col <- setdiff(names(base_dados_cat), c('V16_two','V18_4bbl','V18_idi', 'V25'))
+
+final_col
+
+
+# Finalmente nós vamos ter duas bases de dados para conseguirmos compará-las, uma com todas as colunas tratadas (base_dados_tratada) e outra somente com as numéricas (baseline).
+
+base_dados_tratada <- scale(base_dados_cat[, final_col])
+baseline <- scale(base_dados[, num_cols_fs])
+
+
+# Comparando o desempenho das duas bases no KMeans, notamos que o desempenho da base numérica (baseline) foi melhor, onde a percepção de um cotovelo foi mais fácil. Assim vamos optar por seguir com somente as features numéricas não correlacionadas
+
+plot(fviz_nbclust(base_dados_tratada, kmeans, method="wss", k.max=30))
+plot(fviz_nbclust(baseline, kmeans, method="wss", k.max=30))
+
+
+base_dados_tratada <- baseline
+
+```
+
+## Análises
+
+Após as implementações escreva uma análise da base de dados. Em especial, descreva o conjunto de dados inicial, relate como foi realizado o tratamento, liste quais os atributos escolhidos para manter na base e descreva a base de dados após os tratamentos listados. Explique todos os passos executados, mas sem copiar códigos na análise. Além disso justifique suas escolhas de tratamento nos dados faltantes e seleção de atributos.
+
+
+**Resposta:** <!-- Escreva sua resposta abaixo -->
+
+Para o tratamento dos dados, optamos por primeiramente substituir os valores '?' por NA. Essa decisão foi tomada para que a manipulação desses dados incompletos fosse facilitada. Após isso, com base nas tipagens originais de cada coluna, realizamos o tratamento para garantir a consistência com a base original. A partir disso, para as colunas não numéricas (ex: engine-type) decidimos preencher os dados faltantes com a moda de cada coluna. Já para as colunas númericas optamos por preenchê-las com o valor da mediana das colunas. Essas opções são interessantes pois permitem que não tenhamos que descartar as amostras não preenchidas, mas por outro lado, podem diluir o efeito da variância na coluna, dado que estamos preenchendo com uma estatística descritiva de todas as amostras.
+
+Com os dados tratados, partimos para a seleção de variáveis. Nós separamos as variáveis em numéricas e categóricas e partimos para uma seleção via correlação. No caso, buscamos excluir variáveis muito correlacionadas, em que nosso contexto assumimos aquelas com coeficiente maior que 0.8 ou menor que -0.8. Para as variáveis numéricas optamos pela Correlação de Pearson, e em seguida retiramos algumas colunas que consideramos possuírem alta correlação entre si. Depois, para as colunas categóricas, aplicamos a técnica do One Hot Encoding, onde aplicamos em seguida a Correlação de Spearman. Finalmente, criamos dois datasets, um com somente as colunas numéricas selecionadas e outro com todas as finais. Comparando o desempenho dos dois via SSE no Kmeans notamos que o cotovelo do primeiro era mais pronunciado. Assim decidimos prosseguir somente com as colunas numéricas tratadas.  
+
+<!-- Fim da resposta -->
+
+
+# Atividade 2 -- Agrupamento com o $K$*-means*
+
+Nesta atividade, você deverá agrupar os dados com o algoritmo $K$*-means* e utilizará duas métricas básicas para a escolha do melhor $K$: a soma de distâncias intra-cluster e o coeficiente de silhueta. 
+
+**Implementações:** Nos itens a seguir você implementará a geração de gráficos para a análise das distâncias intra-cluster e do coeficiente de silhueta. Em seguida, você implementará o agrupamento dos dados processados na atividade anterior com o algoritmo $K$*-means* utilizando o valor de $K$ escolhido.  
+
+a) *Gráfico \textsl{Elbow Curve}:* Construa um gráfico com a soma das distâncias intra-cluster para $K$ variando de $2$ a $30$.
+
+```{r atv2a-code}
+# Construindo um gráfico com as distâncias intra-cluster (2 formas)
+
+#Forma 1
+sse_loop <- data.frame(k=numeric(28), sse =numeric(28))
+
+for( k in 2:30){
+  
+  clusters_kmean <- kmeans(base_dados_tratada, k)
+  
+  sse_loop[k-1,] = c(k, clusters_kmean$tot.withinss)
+  
+}
+
+plot(sse_loop, type='b')
+
+#Forma 2
+plot(fviz_nbclust(base_dados_tratada, kmeans, method="wss", k.max=30))
+
+```
+
+b) *Gráfico da Silhueta:* Construa um gráfico com o valor da silhueta para $K$ variando de $2$ a $30$.
+
+```{r atv2b-code}
+# Construindo um gráfico com os valores da silhueta (2 formas)
+
+# Forma 1
+sil_loop <- data.frame(k=numeric(28), sil = numeric(28))
+
+for(k in 2:30){
+  
+  clusters_kmean <- kmeans(base_dados_tratada, k)
+
+  dissE <- daisy(base_dados_tratada)
+  
+  sk <- silhouette(clusters_kmean$cl, dissE)
+  
+  
+  sil_loop[k-1,] = c(k, mean(sk[, 'sil_width']))
+  
+}
+
+plot(sil_loop, type='b')
+
+# Forma 2
+plot(fviz_nbclust(base_dados_tratada, kmeans, method="silhouette", k.max=30))
+
+```
+
+c) *Escolha do $K$:* Avalie os gráficos gerados nos itens anteriores e escolha o melhor valor  de $K$ com base nas informações desses gráficos e na sua análise. Se desejar, use também a função `NbClust` para ajudar nas análises. Com o valor de $K$ definido, utilize o rótulo obtido para cada amostra, indicando o grupo ao qual ela pertence, para gerar um gráfico de dispersão (atribuindo cores diferentes para cada grupo).
+
+```{r atv2c-code}
+
+# Com base nos gráficos anteriores, acreditamos que o melhor valor de k seja por volta de 7, uma vez que no primeiro gráfico temos uma leva inclinação nesse valor e no segundo, um aumento considerável na silhueta.
+
+# Já validando com o NbClust vimos que esse valor, baseado em várias medidas estatística, seria idealmente 2, mas o valor de k=7 também é indicado como um forte candidato.
+
+nb <- NbClust(base_dados_tratada, distance="euclidean", 
+              min.nc=2, max.nc=30, method="complete", 
+              index="all")
+
+fviz_nbclust(nb) + theme_minimal()
+
+# Assim vamos seguir com o valor ideal de 7 clusters
+
+km.res <- kmeans(base_dados_tratada, 7, nstart=25)
+
+# O resultado é apresentado abaixo
+fviz_cluster(km.res, base_dados_tratada,  geom="point", 
+             ellipse.type="convex", show.clust.cent=FALSE,
+             palette="jco", ggtheme=theme_classic())
+
+```
+
+## Análises
+
+Descreva cada um dos gráficos gerados nos itens acima e analise-os. Inclua na sua análise as informações mais importantes que podemos retirar desses gráficos. Discuta sobre a escolha do valor $K$ e sobre a apresentação dos dados no gráfico de dispersão. 
+
+
+**Resposta:** <!-- Escreva sua resposta abaixo -->
+
+Para o primeiro gráfico, que demonstra o SSE em relação ao número de clusters escolhidos, primeiramente notamos que a forma da curva apresentada é consideralvemente suave, sendo difícil a tarefa de encontrar o cotovelo para o número ideal de clusters. No caso, o SSE é uma medida de coesão intra cluster, ou seja, o quão próximas estão as amostras dentro de um cluster proposto. No caso, assumimos que o valor de 7 para o número de clusters seria conveniente, dado que temos uma suave queda na distância. Entretanto, vale notar que outros valores como k=3 ou k=12 seriam bons candidatos também.
+
+Já para o segundo gráfico, temos uma nova medida, o coeficiente de silhueta, que é uma métrica que busca associar tanto as distâncias intra-cluster como as distâncias inter-clusters. Um valor de silhueta próximo de 1 é o ideal. Pelo gráfico, observa-se que o valor de silhueta cresce quase que linearmente com o número de clusters, assim identificar um valor exato ideal é uma tarefa difícil. 
+
+Finalmente, como critério adicional, utilizou-se o pacote Nbclust, que oferece uma gama de métricas estatísticas que avaliam qual é o número ideal de grupos. No caso, o vencedor seria um k=2, mas analisando os resultados vemos que o k=7 também foi indicado como um forte candidato.
+
+Já para o gráfico de dispersão notamos que os dados não estão numa configuração favorável ao agrupamento. Isso se deve ao fato de notarmos grupos com várias intersecções e também grupos em formatos pouco convexos. Entretanto, notamos que alguns grupos foram sim bem definidos, como o 1,3 e 6.
+
+
+<!-- Fim da resposta -->
+
+# Atividade 3 -- Agrupamento com o *DBscan*
+
+Nesta atividade, você deverá agrupar os dados com o algoritmo *DBscan*. Para isso será necessário experimentar com diferentes valores de *eps* e *minPts*. 
+
+a) *Ajuste de Parâmetros:* Experimente com valores diferentes para os parâmetros *eps* e *minPts*. Verifique o impacto dos diferentes valores nos agrupamentos.
+
+```{r atv3a-code}
+set.seed(42)
+
+# Experimento com valores de eps e minPts
+db_1 <- dbscan::dbscan(base_dados_tratada, minPts=15, eps = 20)
+print(db_1)
+fviz_cluster(db_1, base_dados_tratada,  geom="point", 
+             ellipse.type="convex", show.clust.cent=FALSE,
+             palette="jco", ggtheme=theme_classic())
+
+
+# Experimento com valores de eps e minPts
+db_2 <- dbscan::dbscan(base_dados_tratada, minPts = 25, eps = 2.5)
+print(db_2)
+fviz_cluster(db_2, base_dados_tratada,  geom="point", 
+             ellipse.type="convex", show.clust.cent=FALSE,
+             palette="jco", ggtheme=theme_classic())
+
+
+# Experimento com valores de eps e minPts
+db_3 <- dbscan::dbscan(base_dados_tratada, minPts = 5, eps = 1.5)
+print(db_3)
+fviz_cluster(db_3, base_dados_tratada,  geom="point", 
+             ellipse.type="convex", show.clust.cent=FALSE,
+             palette="jco", ggtheme=theme_classic())
+
+
+```
+
+b) *Determinando Ruídos:* Escolha o valor de *minPts* que obteve o melhor resultado no item anterior e use a função `kNNdistplot` do pacote `dbscan` para determinar o melhor valor de *eps* para esse valor de *minPts*. Lembre-se que o objetivo não é remover todos os ruídos. 
+
+```{r atv3b-code}
+# Encontrando o melhor eps com o kNNdistplot
+dbscan::kNNdistplot(base_dados_tratada, k = 7)
+
+# Notamos que um bom valor de Eps seria o de 3.5, entretanto vale notar que a decisão desse Eps não é ideal, pois não se observa uma curva com um cotovelo próximo ao fim do eixo x.
+
+```
+
+c) *Visualizando os Grupos:* Após a escolha dos parâmetros *eps* e *minPts*, utilize o rótulo obtido para cada amostra, indicando o grupo ao qual ela pertence, para gerar um gráfico de dispersão (atribuindo cores diferentes para cada grupo).
+
+```{r atv3c-code}
+# Aplicando o DBscan com os parâmetros escolhidos
+db_final <- dbscan::dbscan(base_dados_tratada, minPts = 5, eps = 3.5)
+print(db_final)
+
+# Construindo um gráfico de dispersão
+fviz_cluster(db_final, base_dados_tratada,  geom="point", 
+             ellipse.type="convex", show.clust.cent=FALSE,
+             palette="jco", ggtheme=theme_classic())
+
+```
+
+## Análises
+
+Descreva os experimentos feitos para a escolha dos parâmetros *eps* e *minPts*. Inclua na sua análise as informações mais importantes que podemos retirar dos gráficos gerados. Justifique a escolha dos valores dos parâmetros e analise a apresentação dos dados no gráfico de dispersão. 
+
+
+**Resposta:** <!-- Escreva sua resposta abaixo -->
+
+Inicialmente, fizemos algumas experimentações com o DBSCAN variando o Eps e o minPts. Notamos que os resultados variam muito com uma leve alteração nos parâmetros iniciais, nossa suposição é que os dados não estão numa configuração para o DBSCAN, principalmente por existirem grupos de diferentes densidades, formas e com muito ruído. Em nossa experimentação, usando minPts= 25 e eps = 2.5 obtivemos um resultado interessante.
+
+Já para a escolha do Eps ideal, utilizou a distância KNN. Nesse caso, o método avalia qual é a distância total entre cada ponto com seus k vizinhos, e é uma boa indicação de qual raio utilizar para o DBSCAN. Entretanto não identificamos um colovelo próximo ao fim do eixo x, que indicaria um raio que fosse capaz de cobrir a maioria dos pontos e ao mesmo tempo não ser muito grande. O formato da curva possui uma porção quase que linear, dificultanto a escolha do Eps.
+
+Observando os resultados no gráfico de dispersão notamos que o método apresentou muita dificuldade em achar um número maior de cluster. Na maioria de nossas experimentações ele ficou entre 0, 1 ou 2 clusters. O motivo disso se deve à densidade dos dados, formas diversas e muito ruído.
+
+
+
+<!-- Fim da resposta -->
+
+# Atividade 4 -- Comparando os Algoritmos
+
+<!-- Use o espaço abaixo para escrever os códigos necessários 
+	para responder as perguntas a seguir  -->
+
+```{r atv4-code}
+
+
+# Comparando com risco
+comp_kmeans = data.frame(risco = base_dados$V1,cluster =  km.res$cluster)
+comp_dbscan = data.frame(risco = base_dados$V1,cluster =  db_final$cluster)
+
+tapply(comp_kmeans[,'risco'],list(comp_kmeans[,'risco'],comp_kmeans[,'cluster']), length)
+tapply(comp_dbscan[,'risco'],list(comp_dbscan[,'risco'],comp_dbscan[,'cluster']), length)
+
+
+# Comparando com marca
+comp_kmeans = data.frame(marca = base_dados$V3,cluster =  km.res$cluster)
+comp_dbscan = data.frame(marca = base_dados$V3,cluster =  db_final$cluster)
+
+tapply(comp_kmeans[,'marca'],list(comp_kmeans[,'marca'],comp_kmeans[,'cluster']), length)
+tapply(comp_dbscan[,'marca'],list(comp_dbscan[,'marca'],comp_dbscan[,'cluster']), length)
+
+
+
+```
+
+Com base nas atividades anteriores, faça uma conclusão dos seus experimentos respondendo às seguintes perguntas: 
+
+a) Qual dos métodos apresentou melhores resultados? Justifique.
+
+b) Quantos agrupamentos foram obtidos?
+
+c) Analisando o campo `symboling` e o grupo designado para cada amostra, os agrupamentos conseguiram separar os níveis de risco?
+
+d) Analisando o campo `make` que contém as marcas dos carros, os agrupamentos conseguiram separar as marcas?
+
+
+**Respostas:** <!-- Escreva sua resposta abaixo -->
+
+a) O KMeans apresentou os melhores resultados. Podemos concluir isso pois o KMeans, validando pelo gráfico de dispersão, foi capaz de entender maiores nuâncias nos dados, criando grupos que quandos analisados aparentam fazerem mais sentido. Outro ponto é que os clusters gerados pelo DBSCAN foram muito grandes, dando a impressão que o método não foi capaz de identificar diferenças locais entre as amostras e agrupá-las.
+
+b) No total foram obtidos 7 clusters para o KMeans (valor escolhido por análises) e 3 (2 + ruído) para o DBSCAN.
+
+c) Comparando com as amostragens iniciais de risco é possível ver que o DBSCAN não conseguiu separar os riscos pois agrupou quase todos em um grupo só. Já o KMeans com 7 clusters tem uma pequena diferenciação, mas existe muito intersecção entre os grupos. Assim nenhum dos dois algoritmos foi capaz de separar os níveis de risco.
+
+d) O mesmo pode ser dito para a marca dos carros. Como o número de clusters foi muito menor que o total de marcas esperávamos que marcas similares aparecessem juntas, entretanto não foi o observado. Ambos os algoritmos não conseguiram diferenciar as marcas e os grupos possuem muita intersecção, sem um sentido claro.
+
+<!-- Fim da resposta -->
+
+
+
+

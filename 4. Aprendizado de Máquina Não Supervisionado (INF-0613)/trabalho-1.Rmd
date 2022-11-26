@@ -1,0 +1,150 @@
+---
+title: INF0613 -- Aprendizado de Máquina Não Supervisionado
+output: pdf_document
+subtitle: Trabalho 1 - Regras de Associação
+author: 
+  - Victor Teodoro Goraieb
+  - André de Souza Gonçalves
+  - Vitor Anastacio da Silva
+  
+---
+
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = TRUE, error = FALSE, message = FALSE, warning = FALSE, tidy = FALSE)
+options(digits = 3)
+
+```
+
+Neste primeiro trabalho vamos minerar Regras de Associação em uma base de dados que contém as vendas de uma padaria. A base de dados está disponível na página da disciplina no Moodle (arquivo `bakery.csv`).
+
+# Atividade 0 -- Configurando o ambiente
+Antes de começar a implementação do seu trabalho configure o _workspace_ e importe todos os pacotes:
+
+```{r atv0-code}
+# Adicione os demais pacotes usados
+# Bibliotecas usadas neste trabalho:
+library(arules)
+
+# Configurando ambiente de trabalho:
+setwd("C:/Users/vgora/Desktop/MINERAÇÃO DE DADOS COMPLEXOS/INF0613010 - Aprendizado de Máquina Não Supervisionado/Trabalho 1")
+
+```
+
+
+# Atividade 1 -- Análise Exploratória da Base de Dados (*3,0 pts*)
+
+Dado um caminho para uma base de dados, leia as transações e faça uma análise Exploratória sobre elas. Use as funções `summary`,  `inspect` e `itemFrequencyPlot`. Na função `inspect` limite sua análise às 10 primeiras transações e na função `itemFrequencyPlot` gere um gráfico com a frequência relativa dos 30 itens mais frequentes. 
+
+```{r atv1-code}
+# Ler transações
+transacoes <- read.transactions('bakery.csv', format="basket",sep=",")
+
+# Visualizando transações
+inspect(transacoes[1:10])
+
+# Sumário da base
+summary(transacoes)
+
+# Analisando a frequência dos itens 
+itemFrequencyPlot(transacoes, topN = 30, type = "relative")
+```
+
+
+## Análise 
+
+a) Descreva a base de dados discutindo os resultados das funções acima. 
+
+**Resposta:** <!-- Escreva sua resposta abaixo -->
+Através das funções acima é possível extrair resultados interessantes. Por exemplo, através do histograma já relativizado de frequência, vemos que café aparece em mais de 50% das transações. Além disso outros itens familiares de uma padaria também são muito comuns como chá, pão e bolo. Já itens mais nichados, como salada e geléia possuem frequências bem menores, em torno de 5% das compras.
+
+Outro ponto que chama atenção é o fato de raramente um cliente comprar apenas um produto. Pelo número de transações para cada número de produtos comprados vemos que uma pessoa em média compra 3 produtos na padaria. Isso faz muito sentido com a realidade, dado que por experiência, muitas pessoas vão à padaria para comer e beber algo.
+
+A presença de café é tão notável que apenas nas primeiras 10 transações já identificamos que 4 clientes compraram café.
+
+<!-- Fim da resposta -->
+
+b) Ao gerarmos o gráfico de frequências, temos uma representação visual de uma informação já presente no resultado da função `summary`. Contudo, esse gráfico nos dá uma visão mais ampla da base. Assim podemos ver a frequência de outros itens em relação aos 10 mais frequentes. Quais informações podemos obter a partir desse gráfico (e da análise anterior) para nos ajudar na extração de regras de associação com o algoritmo `apriori`? Isto é, como a frequência dos itens pode afetar os parâmetros de configuração do algoritmo `apriori`? 
+
+**Resposta:** <!-- Escreva sua resposta abaixo -->
+Pelo gráfico de frequência fica notório que café é o item mais comum nas transações, seguido por pão, chá, bolo e sobremesas. Uma possível regra de associação pode ser derivada do próprio costume de clientes irem à padaria comprar uma bebida e uma comida. Assim podemos pensar em regras de associação do tipo Café -> Sobremesa, Chá -> Bolo, Café -> Pão e vice versa. Essa noção pode até ser vista em combos oferecidos pelas próprias padarias, como combinados do café da manhã (café + pão na chapa)
+
+Esses itens mais comuns irão apresentar um suporte elevado, pois aparecem frequentemente nas transações. Além disso, caso apareçam em conjunto, observaremos uma alta confiança no algoritmo de apriori, assim essas combinações serão retornadas no fim.
+
+<!-- Fim da resposta -->
+
+# Atividade 2 -- Minerando Regras (*3,5 pts*)
+
+Use o algoritmo `apriori` para minerar regras na base de dados fornecida. Experimente com pelo menos *3 conjuntos* de valores diferentes de suporte e confiança para encontrar regras de associação. Imprima as cinco regras com o maior suporte de cada conjunto escolhido.  Lembre-se de usar seu conhecimento sobre a base, obtido na questão anterior, para a escolha dos valores de suporte e confiança.
+
+```{r atv2-code}
+# Conjunto 1: suporte = 0.01   e confiança = 0.8 
+regras_1 <- apriori(transacoes, parameter = list(supp = 0.01, conf = 0.6))
+regras_1 <- sort(regras_1, by="support", decreasing=TRUE)
+inspect(regras_1[1:5])
+
+# Conjunto 2: suporte = 0.05    e confiança = 0.65 
+regras_2 <- apriori(transacoes, parameter = list(supp = 0.001, conf = 0.75))
+regras_2 <- sort(regras_2, by="support", decreasing=TRUE)
+inspect(regras_2[1:5])
+
+# Conjunto 3: suporte = 0.15   e confiança = 0.5 
+regras_3 <- apriori(transacoes, parameter = list(supp = 0.02, conf = 0.5))
+regras_3 <- sort(regras_3, by="support", decreasing=TRUE)
+inspect(regras_3[1:5])
+
+```
+
+## Análises 
+a) Quais as regras mais interessantes geradas a partir dessa base? Justifique.
+
+**Resposta:** <!-- Escreva sua resposta abaixo -->
+Acreditamos que as regras denotam um comportamento claro, já explicitado anteriormente, de clientes usualmente comprarem uma comida e uma bedida. Isso pode ser visto por exemplo com a regra Cake -> Coffee, Pastry -> Coffee e Toast -> Coffee. Outro ponto que chama a atenção é que conclusões acerca de café devem ter uma certa precaução, dado que a regra NULL -> Coffee possui um suporte consideravelmente alto e uma confiança alta também. 
+<!-- Fim da resposta -->
+
+# Atividade 3 -- Medidas de Interesse (*3,5 pts*)
+
+Vimos na aula que, mesmo após as podas do algoritmo `apriori`, ainda temos algumas regras com características indesejáveis como redundâncias e dependência estatística negativa. Também vimos algumas medidas que nos ajudam a analisar melhor essas regras como o lift, a convicção e a razão de chances. Nesta questão, escolha um dos conjuntos de regras geradas na atividade anterior e o analise usando essas medidas. Compute as três medidas para o conjunto escolhido com a função `interestMeasure` e experimente ordenar as regras com cada uma das novas medidas.
+
+
+```{r atv3-code}
+# Compute as medidas de interesse 
+medidas <- interestMeasure(regras_3, 
+                           c("support", "confidence",
+                             "lift", "conviction", 
+                             "oddsRatio"), transacoes)
+
+head(medidas)
+# Apresente as regras ordenadas por lift
+regras_sort_lift <- regras_3[order(-medidas$lift),]
+inspect(regras_sort_lift[1:5])
+
+# Apresente as regras ordenadas por convicção
+regras_sort_conv <- regras_3[order(-medidas$conviction),]
+inspect(regras_sort_conv[1:5])
+
+# Apresente as regras ordenadas por razão de chances
+regras_sort_odds <- regras_3[order(-medidas$oddsRatio),]
+inspect(regras_sort_odds[1:5])
+
+```
+
+
+## Análise 
+a) Quais as regras mais interessantes do conjunto? Justifique.
+
+**Resposta:** <!-- Escreva sua resposta abaixo -->
+Podemos notar que ordenando por lift, a regra Toast -> Coffee apresenta um lift de 1.32 ou seja, caso um cliente compre uma torrada, ele é 1.32x mais propenso a comprar café do que alguém que iria somente comprar café. Um comportamento semelhante pode ser observado com outras regras, como Sandwich -> Coffee. Pela métrica de lift, entre o top5 de regras, todas partiram de uma comida e direcionavam para café.
+
+Outro ponto curioso, é que comparando as regras usando 3 métricas diferentes, lift, conviction e oddsRatio vemos que usando as duas primeiras medidas obtemos o mesmo vetor ordenado. Apenas na posição 9 dos vetores ordenados vemos uma diferenciação entre o resultado obtido pelo oddsRatio e o restante.
+
+Dessa forma, as regras mais interessantes do conjunto, de acordo com 3 métricas diferentes são as seguintes:
+
+{Toast}	=>	{Coffee}
+{Spanish Brunch}	=>	{Coffee}
+{Sandwich}	=>	{Coffee}	
+{Medialuna}	=>	{Coffee}
+{Cookies}	=>	{Coffee}
+
+<!-- Fim da resposta -->
+
